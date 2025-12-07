@@ -5,6 +5,7 @@
 
 #include "dns_monitor.h"
 #include "windivert_loader.h"
+#include <winsock2.h>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
