@@ -1,6 +1,16 @@
 /*
  * traffic_interceptor.cpp
- * 流量拦截器实现
+ * 流量拦截器实现 - 基于 FLOW 层的进程感知代理
+ *
+ * 核心原理：
+ * 1. 使用 FLOW 层获取连接的进程信息（最可靠的方式）
+ * 2. 使用 NETWORK 层拦截和重定向流量
+ * 3. 在 FLOW 层连接建立事件中做出代理决策
+ * 4. 在 NETWORK 层根据决策重定向 SYN 包
+ *
+ * 重要：FLOW 层事件可能在 SYN 包之后到达，所以需要：
+ * - 在 FLOW 层预先标记需要代理的连接
+ * - 在 NETWORK 层检查是否有预先标记的决策
  */
 
 #include "traffic_interceptor.h"
@@ -10,6 +20,10 @@
 #include "windivert_loader.h"
 #include <sstream>
 #include <chrono>
+#include <cstdio>
+#include <algorithm>
+#include <cctype>
+#include <iomanip>
 
 namespace proxifier {
 
@@ -37,35 +51,49 @@ bool TrafficInterceptor::start() {
         return false;
     }
     
-    // 获取本地代理地址
+    // 获取本地代理地址和端口
     localProxyPort_ = proxyServer_->getBindPort();
     if (localProxyPort_ == 0) {
         return false;
     }
     
+    // 本地代理地址 127.0.0.1 的网络字节序
+    localProxyAddr_ = 0x0100007F;  // 127.0.0.1 in network byte order
+    
+    printf("[拦截器] 本地代理: 127.0.0.1:%d\n", localProxyPort_);
+    
     // 打开 NETWORK 层句柄
-    // 只拦截出站 TCP 连接
-    std::string filter = "outbound and tcp and !loopback";
+    // 拦截出站 TCP 连接，排除到本地代理的连接和回环地址
+    char filter[512];
+    snprintf(filter, sizeof(filter), 
+        "outbound and tcp and "
+        "!(ip.DstAddr == 127.0.0.1) and "
+        "!(ip.SrcAddr == 127.0.0.1)");
+    
+    printf("[拦截器] 过滤器: %s\n", filter);
     
     handle_ = WinDivertOpen(
-        filter.c_str(),
+        filter,
         WINDIVERT_LAYER_NETWORK,
         0,  // 优先级
         0   // 标志
     );
     
     if (handle_ == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        printf("[拦截器] 打开 WinDivert 失败，错误码: %lu\n", error);
         return false;
     }
     
     // 设置队列参数
-    WinDivertSetParam(handle_, WINDIVERT_PARAM_QUEUE_LENGTH, 8192);
+    WinDivertSetParam(handle_, WINDIVERT_PARAM_QUEUE_LENGTH, 16384);
     WinDivertSetParam(handle_, WINDIVERT_PARAM_QUEUE_TIME, 2000);
-    WinDivertSetParam(handle_, WINDIVERT_PARAM_QUEUE_SIZE, 4194304);
+    WinDivertSetParam(handle_, WINDIVERT_PARAM_QUEUE_SIZE, 8388608);
     
     running_ = true;
     interceptThread_ = std::thread(&TrafficInterceptor::interceptThread, this);
     
+    printf("[拦截器] 启动成功\n");
     return true;
 }
 
@@ -146,54 +174,126 @@ void TrafficInterceptor::processPacket(void* packet, UINT packetLen, void* addrP
     srcPort = WinDivertHelperNtohs(tcpHdr->SrcPort);
     dstPort = WinDivertHelperNtohs(tcpHdr->DstPort);
     
-    // 检查是否是到本地代理的连接（避免循环）
-    if (dstAddr == localProxyAddr_ && dstPort == localProxyPort_) {
-        WinDivertSend(handle_, packet, packetLen, nullptr, addr);
-        
-        std::lock_guard<std::mutex> lock(statsMutex_);
-        stats_.packetsAllowed++;
-        return;
-    }
-    
     // 生成连接键
     std::string connKey = makeConnectionKey(srcAddr, srcPort, dstAddr, dstPort);
     
     // 查找或创建连接跟踪
     TrackedConnection* conn = getOrCreateConnection(srcAddr, srcPort, dstAddr, dstPort, 6);
     
-    // 只在 SYN 包时做决策
+    // 只在 SYN 包时做决策（新连接）
     if (tcpHdr->Syn && !tcpHdr->Ack) {
         conn->synSeen = true;
+        conn->originalDstAddr = dstAddr;
+        conn->originalDstPort = dstPort;
         
-        // 查找进程信息
-        const ConnectionInfo* flowInfo = processMonitor_->findConnection(
-            srcAddr, srcPort, dstAddr, dstPort, 6);
-        
-        if (flowInfo != nullptr) {
-            conn->processId = flowInfo->processId;
-            conn->processName = flowInfo->processName;
+        // 首先检查是否有 FLOW 层的预先决策
+        bool hasPreDecision = false;
+        {
+            std::lock_guard<std::mutex> lock(preDecisionsMutex_);
+            auto preIt = preDecisions_.find(connKey);
+            if (preIt != preDecisions_.end()) {
+                // 使用预先决策
+                conn->action = preIt->second.action;
+                conn->proxyServer = preIt->second.proxyServer;
+                conn->processId = preIt->second.processId;
+                conn->processName = preIt->second.processName;
+                hasPreDecision = true;
+                
+                printf("[SYN-预决策] %s:%d -> %s:%d 进程: %s (PID=%u) 动作=%s\n",
+                       ipToString(srcAddr).c_str(), srcPort,
+                       ipToString(dstAddr).c_str(), dstPort,
+                       conn->processName.c_str(), conn->processId,
+                       conn->action == InterceptAction::REDIRECT ? "代理" :
+                       (conn->action == InterceptAction::BLOCK ? "阻止" : "直连"));
+                
+                // 移除已使用的预先决策
+                preDecisions_.erase(preIt);
+            }
         }
         
-        // 做出拦截决策
-        InterceptDecision decision = makeDecision(
-            conn->processId, conn->processName,
-            dstAddr, dstPort, 6);
+        if (!hasPreDecision) {
+            // 从 FLOW 层查找进程信息
+            const ConnectionInfo* flowInfo = processMonitor_->findConnection(
+                srcAddr, srcPort, dstAddr, dstPort, 6);
+            
+            if (flowInfo != nullptr) {
+                conn->processId = flowInfo->processId;
+                conn->processName = flowInfo->processName;
+            } else {
+                // 如果 FLOW 层还没有信息，尝试等待一小段时间
+                // 因为 FLOW 层事件可能稍后到达
+                for (int retry = 0; retry < 5; retry++) {
+                    Sleep(2);  // 等待 2ms
+                    flowInfo = processMonitor_->findConnection(
+                        srcAddr, srcPort, dstAddr, dstPort, 6);
+                    if (flowInfo != nullptr) {
+                        conn->processId = flowInfo->processId;
+                        conn->processName = flowInfo->processName;
+                        break;
+                    }
+                    
+                    // 同时检查预先决策是否到达
+                    {
+                        std::lock_guard<std::mutex> lock(preDecisionsMutex_);
+                        auto preIt = preDecisions_.find(connKey);
+                        if (preIt != preDecisions_.end()) {
+                            conn->action = preIt->second.action;
+                            conn->proxyServer = preIt->second.proxyServer;
+                            conn->processId = preIt->second.processId;
+                            conn->processName = preIt->second.processName;
+                            hasPreDecision = true;
+                            preDecisions_.erase(preIt);
+                            break;
+                        }
+                    }
+                }
+                
+                if (!hasPreDecision && flowInfo == nullptr) {
+                    // 仍然没有信息，设置为 pending
+                    conn->processId = 0;
+                    conn->processName = "<pending>";
+                }
+            }
+            
+            if (!hasPreDecision) {
+                // 调试输出
+                printf("[SYN] %s:%d -> %s:%d 进程: %s (PID=%u)\n",
+                       ipToString(srcAddr).c_str(), srcPort,
+                       ipToString(dstAddr).c_str(), dstPort,
+                       conn->processName.c_str(), conn->processId);
+                
+                // 做出拦截决策
+                InterceptDecision decision = makeDecision(
+                    conn->processId, conn->processName,
+                    dstAddr, dstPort, 6);
+                
+                conn->action = decision.action;
+                conn->proxyServer = decision.proxyServer;
+            }
+        }
         
-        conn->action = decision.action;
-        conn->proxyServer = decision.proxyServer;
-        
-        if (decision.action == InterceptAction::REDIRECT && decision.proxyServer != nullptr) {
-            // 注册原始目标信息
+        // 处理重定向或阻止
+        if (conn->action == InterceptAction::REDIRECT && conn->proxyServer != nullptr) {
+            // 注册原始目标信息到本地代理服务器
             proxyServer_->registerOriginalTarget(
                 srcAddr, srcPort, dstAddr, dstPort,
                 conn->processId, conn->processName,
-                decision.proxyServer);
+                conn->proxyServer);
             
             conn->redirected = true;
             
+            printf("[重定向] %s (PID=%u) %s:%d -> 代理 %s:%d\n",
+                   conn->processName.c_str(), conn->processId,
+                   ipToString(dstAddr).c_str(), dstPort,
+                   conn->proxyServer->address.c_str(), conn->proxyServer->port);
+            
             std::lock_guard<std::mutex> lock(statsMutex_);
             stats_.connectionsRedirected++;
-        } else if (decision.action == InterceptAction::BLOCK) {
+        } else if (conn->action == InterceptAction::BLOCK) {
+            printf("[阻止] %s (PID=%u) -> %s:%d\n",
+                   conn->processName.c_str(), conn->processId,
+                   ipToString(dstAddr).c_str(), dstPort);
+            
             std::lock_guard<std::mutex> lock(statsMutex_);
             stats_.connectionsBlocked++;
         }
@@ -254,8 +354,17 @@ InterceptDecision TrafficInterceptor::makeDecision(UINT32 processId, const std::
     // 转换目标地址为字符串
     std::string dstAddrStr = ipToString(dstAddr);
     
+    // 如果进程名为空或 pending，尝试从进程 ID 获取
+    std::string effectiveProcessName = processName;
+    if (effectiveProcessName.empty() || effectiveProcessName == "<pending>" || effectiveProcessName == "<unknown>") {
+        if (processId != 0 && processId != 4) {
+            // 尝试获取进程名
+            effectiveProcessName = processMonitor_->getProcessName(processId);
+        }
+    }
+    
     // 匹配规则
-    const Rule* rule = config_->matchRule(processName, dstAddrStr, dstPort);
+    const Rule* rule = config_->matchRule(effectiveProcessName, dstAddrStr, dstPort);
     
     if (rule != nullptr) {
         decision.matchedRule = rule;
@@ -269,6 +378,8 @@ InterceptDecision TrafficInterceptor::makeDecision(UINT32 processId, const std::
             case ProxyType::BLOCK:
                 decision.action = InterceptAction::BLOCK;
                 decision.reason = "Rule: " + rule->name + " (Block)";
+                printf("[规则匹配] %s (PID=%u) -> %s:%d 匹配规则 '%s' -> 阻止\n",
+                       effectiveProcessName.c_str(), processId, dstAddrStr.c_str(), dstPort, rule->name.c_str());
                 break;
                 
             case ProxyType::SOCKS5:
@@ -277,9 +388,14 @@ InterceptDecision TrafficInterceptor::makeDecision(UINT32 processId, const std::
                 if (decision.proxyServer != nullptr) {
                     decision.action = InterceptAction::REDIRECT;
                     decision.reason = "Rule: " + rule->name + " (Proxy)";
+                    printf("[规则匹配] %s (PID=%u) -> %s:%d 匹配规则 '%s' -> 代理 %s:%d\n",
+                           effectiveProcessName.c_str(), processId, dstAddrStr.c_str(), dstPort, rule->name.c_str(),
+                           decision.proxyServer->address.c_str(), decision.proxyServer->port);
                 } else {
                     decision.action = InterceptAction::ALLOW;
                     decision.reason = "Rule: " + rule->name + " (Proxy not found, fallback to direct)";
+                    printf("[规则匹配] %s -> %s:%d 匹配规则 '%s' -> 代理未找到，直连\n",
+                           effectiveProcessName.c_str(), dstAddrStr.c_str(), dstPort, rule->name.c_str());
                 }
                 break;
         }
@@ -298,8 +414,13 @@ InterceptDecision TrafficInterceptor::makeDecisionV6(UINT32 processId, const std
 
 std::string TrafficInterceptor::makeConnectionKey(UINT32 srcAddr, UINT16 srcPort,
                                                   UINT32 dstAddr, UINT16 dstPort) const {
+    // 使用与 ProcessMonitor 相同的格式（但不包含协议，因为我们只处理 TCP）
     std::ostringstream oss;
-    oss << std::hex << srcAddr << ":" << srcPort << "-" << dstAddr << ":" << dstPort;
+    oss << std::hex << std::setfill('0')
+        << std::setw(8) << srcAddr << ":"
+        << std::setw(4) << srcPort << "-"
+        << std::setw(8) << dstAddr << ":"
+        << std::setw(4) << dstPort;
     return oss.str();
 }
 
@@ -343,6 +464,10 @@ bool TrafficInterceptor::redirectPacket(void* packet, UINT packetLen, void* addr
         return false;
     }
     
+    // 保存原始目标地址（用于调试）
+    UINT32 origDstAddr = ipHdr->DstAddr;
+    UINT16 origDstPort = WinDivertHelperNtohs(tcpHdr->DstPort);
+    
     // 修改目标地址为本地代理
     ipHdr->DstAddr = localProxyAddr_;
     tcpHdr->DstPort = WinDivertHelperHtons(localProxyPort_);
@@ -351,7 +476,15 @@ bool TrafficInterceptor::redirectPacket(void* packet, UINT packetLen, void* addr
     WinDivertHelperCalcChecksums(packet, packetLen, addr, 0);
     
     // 发送修改后的包
-    return WinDivertSend(handle_, packet, packetLen, nullptr, addr) != FALSE;
+    BOOL result = WinDivertSend(handle_, packet, packetLen, nullptr, addr);
+    
+    if (!result) {
+        DWORD error = GetLastError();
+        printf("[重定向] 发送失败，错误码: %lu\n", error);
+        return false;
+    }
+    
+    return true;
 }
 
 bool TrafficInterceptor::restorePacket(void* packet, UINT packetLen, void* addrPtr,
@@ -424,6 +557,53 @@ void TrafficInterceptor::removeProcessFromProxy(UINT32 pid) {
 void TrafficInterceptor::setLocalProxyAddress(UINT32 addr, UINT16 port) {
     localProxyAddr_ = addr;
     localProxyPort_ = port;
+}
+
+void TrafficInterceptor::onFlowEstablished(UINT32 processId, const std::string& processName,
+                                           UINT32 localAddr, UINT16 localPort,
+                                           UINT32 remoteAddr, UINT16 remotePort,
+                                           UINT8 protocol) {
+    // 只处理 TCP 出站连接
+    if (protocol != 6) return;
+    
+    // 忽略回环地址
+    if ((localAddr & 0xFF) == 127 || (remoteAddr & 0xFF) == 127) return;
+    
+    // 做出代理决策
+    InterceptDecision decision = makeDecision(processId, processName, remoteAddr, remotePort, protocol);
+    
+    // 如果需要代理或阻止，保存预先决策
+    if (decision.action != InterceptAction::ALLOW) {
+        std::string key = makeConnectionKey(localAddr, localPort, remoteAddr, remotePort);
+        
+        PreDecision preDec;
+        preDec.action = decision.action;
+        preDec.proxyServer = decision.proxyServer;
+        preDec.processId = processId;
+        preDec.processName = processName;
+        preDec.timestamp = getCurrentTimestamp();
+        
+        {
+            std::lock_guard<std::mutex> lock(preDecisionsMutex_);
+            preDecisions_[key] = preDec;
+            
+            // 清理过期的预先决策（超过 10 秒）
+            INT64 now = getCurrentTimestamp();
+            for (auto it = preDecisions_.begin(); it != preDecisions_.end(); ) {
+                if (now - it->second.timestamp > 10000) {
+                    it = preDecisions_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        
+        printf("[FLOW预决策] %s (PID=%u) %s:%d -> %s:%d 动作=%s\n",
+               processName.c_str(), processId,
+               ipToString(localAddr).c_str(), localPort,
+               ipToString(remoteAddr).c_str(), remotePort,
+               decision.action == InterceptAction::REDIRECT ? "代理" : "阻止");
+    }
 }
 
 } // namespace proxifier

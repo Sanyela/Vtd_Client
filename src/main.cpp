@@ -1,12 +1,12 @@
 /*
  * main.cpp
  * WinDivert Proxifier - 进程级别 SOCKS5 代理
- * 
+ *
  * 功能：
  * - 根据配置文件规则，将指定进程的网络流量重定向到 SOCKS5 代理
  * - 支持进程名、目标地址、端口匹配
  * - 支持 SOCKS5 认证
- * 
+ *
  * 用法: proxifier.exe [config_file]
  */
 
@@ -16,6 +16,8 @@
 #include <signal.h>
 #include <string>
 #include <iostream>
+#include <algorithm>
+#include <conio.h>  // 用于 _getch()
 
 #include "config.h"
 #include "process_monitor.h"
@@ -120,6 +122,217 @@ void printConfig(const Config& config) {
     printf("\n================\n");
 }
 
+// 安全地读取密码（不显示输入）
+std::string readPassword() {
+    std::string password;
+    char ch;
+    while ((ch = _getch()) != '\r' && ch != '\n') {
+        if (ch == '\b') {  // 退格键
+            if (!password.empty()) {
+                password.pop_back();
+                printf("\b \b");  // 删除显示的星号
+            }
+        } else if (ch >= 32 && ch <= 126) {  // 可打印字符
+            password += ch;
+            printf("*");
+        }
+    }
+    printf("\n");
+    return password;
+}
+
+// 处理代理凭据
+// 返回 true 表示凭据已准备好，false 表示用户取消
+bool handleProxyCredentials(Config& config) {
+    // 尝试从文件加载已保存的凭据
+    std::vector<ProxyCredentials> savedCredentials;
+    if (credentialsFileExists() && loadCredentials(savedCredentials)) {
+        printf("发现已保存的凭据，正在加载...\n");
+        for (const auto& cred : savedCredentials) {
+            config.updateProxyCredentials(cred.proxyId, cred.username, cred.password);
+        }
+    }
+    
+    // 检查是否还有需要凭据的代理（排除直接重定向类型）
+    auto proxiesNeedingCreds = config.getProxiesNeedingCredentials();
+    
+    // 过滤掉直接重定向类型的代理
+    proxiesNeedingCreds.erase(
+        std::remove_if(proxiesNeedingCreds.begin(), proxiesNeedingCreds.end(),
+            [](const ProxyServer* p) { return p->isDirectRedirect; }),
+        proxiesNeedingCreds.end());
+    
+    if (proxiesNeedingCreds.empty()) {
+        return true;  // 所有代理都有凭据
+    }
+    
+    printf("\n=== 代理认证配置 ===\n");
+    printf("以下代理需要输入账号密码：\n\n");
+    
+    std::vector<ProxyCredentials> newCredentials;
+    
+    for (auto* proxy : proxiesNeedingCreds) {
+        printf("代理 [ID=%d]: %s:%d\n", proxy->id, proxy->address.c_str(), proxy->port);
+        
+        // 输入用户名
+        printf("  用户名: ");
+        std::string username;
+        std::getline(std::cin, username);
+        
+        if (username.empty()) {
+            printf("  用户名不能为空，跳过此代理\n");
+            continue;
+        }
+        
+        // 输入密码
+        printf("  密码: ");
+        std::string password = readPassword();
+        
+        if (password.empty()) {
+            printf("  密码不能为空，跳过此代理\n");
+            continue;
+        }
+        
+        // 测试连接
+        printf("  正在测试连接...");
+        fflush(stdout);
+        
+        auto testResult = socks5::testProxyConnection(
+            proxy->address, proxy->port, username, password, 10000);
+        
+        if (testResult.success) {
+            printf(" 成功! (延迟: %dms)\n", testResult.latencyMs);
+            
+            // 更新配置
+            config.updateProxyCredentials(proxy->id, username, password);
+            
+            // 保存凭据
+            ProxyCredentials cred;
+            cred.proxyId = proxy->id;
+            cred.username = username;
+            cred.password = password;
+            newCredentials.push_back(cred);
+        } else {
+            printf(" 失败!\n");
+            printf("  错误: %s\n", testResult.errorMessage.c_str());
+            
+            // 询问是否重试
+            printf("  是否重试? (y/n): ");
+            char choice;
+            std::cin >> choice;
+            std::cin.ignore();  // 清除换行符
+            
+            if (choice == 'y' || choice == 'Y') {
+                // 重新处理这个代理（通过递归调用）
+                proxiesNeedingCreds.clear();
+                proxiesNeedingCreds.push_back(proxy);
+                
+                // 简单重试一次
+                printf("  用户名: ");
+                std::getline(std::cin, username);
+                printf("  密码: ");
+                password = readPassword();
+                
+                printf("  正在测试连接...");
+                fflush(stdout);
+                
+                testResult = socks5::testProxyConnection(
+                    proxy->address, proxy->port, username, password, 10000);
+                
+                if (testResult.success) {
+                    printf(" 成功! (延迟: %dms)\n", testResult.latencyMs);
+                    config.updateProxyCredentials(proxy->id, username, password);
+                    
+                    ProxyCredentials cred;
+                    cred.proxyId = proxy->id;
+                    cred.username = username;
+                    cred.password = password;
+                    newCredentials.push_back(cred);
+                } else {
+                    printf(" 失败: %s\n", testResult.errorMessage.c_str());
+                    printf("  警告: 代理 %d 认证失败，将跳过\n", proxy->id);
+                }
+            }
+        }
+        printf("\n");
+    }
+    
+    // 保存新凭据
+    if (!newCredentials.empty()) {
+        // 合并已有凭据和新凭据
+        for (const auto& newCred : newCredentials) {
+            bool found = false;
+            for (auto& saved : savedCredentials) {
+                if (saved.proxyId == newCred.proxyId) {
+                    saved = newCred;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                savedCredentials.push_back(newCred);
+            }
+        }
+        
+        printf("是否保存凭据以便下次自动登录? (y/n): ");
+        char saveChoice;
+        std::cin >> saveChoice;
+        std::cin.ignore();
+        
+        if (saveChoice == 'y' || saveChoice == 'Y') {
+            if (saveCredentials(savedCredentials)) {
+                printf("凭据已保存到 credentials.dat\n");
+            } else {
+                printf("警告: 无法保存凭据\n");
+            }
+        }
+    }
+    
+    printf("======================\n\n");
+    return true;
+}
+
+// 验证所有需要认证的代理
+bool verifyAllProxyConnections(Config& config) {
+    printf("\n正在验证代理连接...\n");
+    
+    bool allSuccess = true;
+    bool hasProxyToTest = false;
+    
+    for (const auto& proxy : config.getProxies()) {
+        // 跳过直接重定向类型的代理（它们不使用 SOCKS5 协议）
+        if (proxy.isDirectRedirect) {
+            printf("  代理 [ID=%d] %s:%d - 直接重定向，跳过验证\n",
+                   proxy.id, proxy.address.c_str(), proxy.port);
+            continue;
+        }
+        
+        if (proxy.authEnabled) {
+            hasProxyToTest = true;
+            printf("  测试代理 [ID=%d] %s:%d ... ",
+                   proxy.id, proxy.address.c_str(), proxy.port);
+            fflush(stdout);
+            
+            auto result = socks5::testProxyConnection(
+                proxy.address, proxy.port,
+                proxy.username, proxy.password, 10000);
+            
+            if (result.success) {
+                printf("成功 (延迟: %dms)\n", result.latencyMs);
+            } else {
+                printf("失败: %s\n", result.errorMessage.c_str());
+                allSuccess = false;
+            }
+        }
+    }
+    
+    if (!hasProxyToTest) {
+        printf("  没有需要验证的 SOCKS5 代理\n");
+    }
+    
+    return allSuccess;
+}
+
 // 进程监控回调
 void onConnectionEvent(ConnectionEvent event, const ConnectionInfo& info) {
     const char* eventStr = (event == ConnectionEvent::ESTABLISHED) ? "建立" : "关闭";
@@ -140,6 +353,16 @@ void onConnectionEvent(ConnectionEvent event, const ConnectionInfo& info) {
     }
     
     printf(" [%s]\n", info.protocol == 6 ? "TCP" : "UDP");
+    
+    // 在连接建立时，通知流量拦截器做出预先决策
+    if (event == ConnectionEvent::ESTABLISHED && info.outbound && !info.isIPv6) {
+        TrafficInterceptor& interceptor = getTrafficInterceptor();
+        interceptor.onFlowEstablished(
+            info.processId, info.processName,
+            info.localAddr[0], info.localPort,
+            info.remoteAddr[0], info.remotePort,
+            info.protocol);
+    }
 }
 
 // 会话回调
@@ -246,6 +469,29 @@ int main(int argc, char* argv[]) {
     if (testMode) {
         printf("\n配置文件测试通过！\n");
         return 0;
+    }
+    
+    // 处理代理凭据（检查、加载、输入、验证）
+    if (!handleProxyCredentials(config)) {
+        printf("凭据配置已取消\n");
+        socks5::cleanupWinsock();
+        WinDivertLoaderCleanup();
+        return 1;
+    }
+    
+    // 验证所有代理连接
+    if (!verifyAllProxyConnections(config)) {
+        printf("\n警告: 部分代理连接验证失败\n");
+        printf("是否继续启动? (y/n): ");
+        char choice;
+        std::cin >> choice;
+        std::cin.ignore();
+        if (choice != 'y' && choice != 'Y') {
+            printf("用户取消启动\n");
+            socks5::cleanupWinsock();
+            WinDivertLoaderCleanup();
+            return 1;
+        }
     }
     
     // 检查管理员权限

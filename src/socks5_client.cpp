@@ -477,4 +477,52 @@ bool Socks5Client::recvAll(void* data, size_t len) {
     return true;
 }
 
+namespace socks5 {
+
+Socks5TestResult testProxyConnection(
+    const std::string& proxyHost,
+    int proxyPort,
+    const std::string& username,
+    const std::string& password,
+    int timeoutMs) {
+    
+    Socks5TestResult result;
+    
+    // 记录开始时间
+    LARGE_INTEGER frequency, startTime, endTime;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&startTime);
+    
+    // 创建 SOCKS5 客户端
+    Socks5Client client;
+    client.setProxy(proxyHost, proxyPort);
+    client.setTimeout(timeoutMs, timeoutMs);
+    
+    // 如果有认证信息，设置认证
+    if (!username.empty() || !password.empty()) {
+        client.setAuth(username, password);
+    }
+    
+    // 尝试连接到代理服务器并完成握手
+    if (!client.connectToProxy()) {
+        result.success = false;
+        result.errorMessage = client.getLastError();
+        return result;
+    }
+    
+    // 计算延迟
+    QueryPerformanceCounter(&endTime);
+    result.latencyMs = (int)((endTime.QuadPart - startTime.QuadPart) * 1000 / frequency.QuadPart);
+    
+    result.success = true;
+    result.errorMessage = "连接成功";
+    
+    // 关闭连接
+    client.close();
+    
+    return result;
+}
+
+} // namespace socks5
+
 } // namespace proxifier

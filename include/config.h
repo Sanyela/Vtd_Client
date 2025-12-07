@@ -14,12 +14,20 @@
 
 namespace proxifier {
 
+// 凭据信息结构
+struct ProxyCredentials {
+    int proxyId = 0;
+    std::string username;
+    std::string password;
+};
+
 // 代理类型
 enum class ProxyType {
     DIRECT,     // 直连
     BLOCK,      // 阻止
     SOCKS5,     // SOCKS5 代理
-    HTTP        // HTTP 代理（暂不实现）
+    HTTP,       // HTTP 代理（暂不实现）
+    REDIRECT    // 直接重定向/端口转发（不使用代理协议）
 };
 
 // 代理服务器配置
@@ -31,6 +39,7 @@ struct ProxyServer {
     bool authEnabled = false;
     std::string username;
     std::string password;
+    bool isDirectRedirect = false;  // 是否为直接重定向（不使用SOCKS5协议）
 };
 
 // 规则动作
@@ -93,6 +102,12 @@ public:
     
     // 清空配置
     void clear();
+    
+    // 更新代理凭据
+    bool updateProxyCredentials(int proxyId, const std::string& username, const std::string& password);
+    
+    // 获取需要认证但凭据为空的代理列表
+    std::vector<ProxyServer*> getProxiesNeedingCredentials();
 
 private:
     std::vector<ProxyServer> proxies_;
@@ -107,6 +122,12 @@ private:
 
 // 全局配置实例
 Config& getConfig();
+
+// 凭据文件管理函数
+bool saveCredentials(const std::vector<ProxyCredentials>& credentials);
+bool loadCredentials(std::vector<ProxyCredentials>& credentials);
+bool credentialsFileExists();
+bool deleteCredentialsFile();
 
 } // namespace proxifier
 

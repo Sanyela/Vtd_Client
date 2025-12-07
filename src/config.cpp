@@ -8,6 +8,11 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <windows.h>
+
+// 凭据文件名
+static const char* CREDENTIALS_FILE = "credentials.dat";
 
 namespace proxifier {
 
@@ -190,6 +195,15 @@ bool Config::loadFromXml(const std::string& xmlContent) {
             proxy.password = getXmlTagContent(proxyXml, "Password");
         }
         
+        // 检测是否为直接重定向（认证启用但用户名密码都为空）
+        // 这种情况下，这个"代理"实际上是一个直接端口转发目标
+        if (proxy.authEnabled && proxy.username.empty() && proxy.password.empty()) {
+            proxy.isDirectRedirect = true;
+            proxy.authEnabled = false;  // 直接重定向不需要认证
+            printf("[配置] 代理 %d (%s:%d) 被识别为直接重定向目标\n",
+                   proxy.id, proxy.address.c_str(), proxy.port);
+        }
+        
         addProxy(proxy);
     }
     
@@ -285,6 +299,139 @@ void Config::clear() {
     defaultProxyId_ = 0;
 }
 
+bool Config::updateProxyCredentials(int proxyId, const std::string& username, const std::string& password) {
+    for (auto& proxy : proxies_) {
+        if (proxy.id == proxyId) {
+            proxy.username = username;
+            proxy.password = password;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<ProxyServer*> Config::getProxiesNeedingCredentials() {
+    std::vector<ProxyServer*> result;
+    for (auto& proxy : proxies_) {
+        if (proxy.authEnabled && (proxy.username.empty() || proxy.password.empty())) {
+            result.push_back(&proxy);
+        }
+    }
+    return result;
+}
+
+// ============ 凭据文件管理 ============
+
+// 简单的 XOR 加密（仅用于基本混淆，不是真正的安全加密）
+static std::string xorEncrypt(const std::string& data, const std::string& key) {
+    std::string result = data;
+    for (size_t i = 0; i < result.size(); i++) {
+        result[i] ^= key[i % key.size()];
+    }
+    return result;
+}
+
+// 保存凭据到文件
+bool saveCredentials(const std::vector<ProxyCredentials>& credentials) {
+    std::ofstream file(CREDENTIALS_FILE, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+    
+    // 简单的加密密钥（实际应用中应该使用更安全的方式）
+    std::string key = "WinDivertProxifier2024";
+    
+    // 写入凭据数量
+    uint32_t count = (uint32_t)credentials.size();
+    file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+    
+    for (const auto& cred : credentials) {
+        // 写入代理ID
+        file.write(reinterpret_cast<const char*>(&cred.proxyId), sizeof(cred.proxyId));
+        
+        // 加密并写入用户名
+        std::string encUsername = xorEncrypt(cred.username, key);
+        uint32_t usernameLen = (uint32_t)encUsername.size();
+        file.write(reinterpret_cast<const char*>(&usernameLen), sizeof(usernameLen));
+        file.write(encUsername.c_str(), usernameLen);
+        
+        // 加密并写入密码
+        std::string encPassword = xorEncrypt(cred.password, key);
+        uint32_t passwordLen = (uint32_t)encPassword.size();
+        file.write(reinterpret_cast<const char*>(&passwordLen), sizeof(passwordLen));
+        file.write(encPassword.c_str(), passwordLen);
+    }
+    
+    file.close();
+    return true;
+}
+
+// 从文件加载凭据
+bool loadCredentials(std::vector<ProxyCredentials>& credentials) {
+    std::ifstream file(CREDENTIALS_FILE, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+    
+    std::string key = "WinDivertProxifier2024";
+    
+    // 读取凭据数量
+    uint32_t count = 0;
+    file.read(reinterpret_cast<char*>(&count), sizeof(count));
+    
+    if (count > 100) {  // 安全检查
+        file.close();
+        return false;
+    }
+    
+    credentials.clear();
+    
+    for (uint32_t i = 0; i < count; i++) {
+        ProxyCredentials cred;
+        
+        // 读取代理ID
+        file.read(reinterpret_cast<char*>(&cred.proxyId), sizeof(cred.proxyId));
+        
+        // 读取并解密用户名
+        uint32_t usernameLen = 0;
+        file.read(reinterpret_cast<char*>(&usernameLen), sizeof(usernameLen));
+        if (usernameLen > 256) {  // 安全检查
+            file.close();
+            return false;
+        }
+        std::string encUsername(usernameLen, '\0');
+        file.read(&encUsername[0], usernameLen);
+        cred.username = xorEncrypt(encUsername, key);
+        
+        // 读取并解密密码
+        uint32_t passwordLen = 0;
+        file.read(reinterpret_cast<char*>(&passwordLen), sizeof(passwordLen));
+        if (passwordLen > 256) {  // 安全检查
+            file.close();
+            return false;
+        }
+        std::string encPassword(passwordLen, '\0');
+        file.read(&encPassword[0], passwordLen);
+        cred.password = xorEncrypt(encPassword, key);
+        
+        credentials.push_back(cred);
+    }
+    
+    file.close();
+    return true;
+}
+
+// 检查凭据文件是否存在
+bool credentialsFileExists() {
+    std::ifstream file(CREDENTIALS_FILE);
+    return file.good();
+}
+
+// 删除凭据文件
+bool deleteCredentialsFile() {
+    return DeleteFileA(CREDENTIALS_FILE) != 0;
+}
+
 void Config::compileRulePatterns(Rule& rule) {
     // 编译目标地址模式
     for (const auto& target : rule.targets) {
@@ -350,11 +497,15 @@ bool Config::matchWildcard(const std::string& pattern, const std::string& str) c
     }
 }
 
-const Rule* Config::matchRule(const std::string& processName, 
-                              const std::string& targetAddr, 
+const Rule* Config::matchRule(const std::string& processName,
+                              const std::string& targetAddr,
                               int targetPort) const {
     std::string procNameLower = toLower(processName);
     std::string targetLower = toLower(targetAddr);
+    
+    // 调试输出
+    static int debugCounter = 0;
+    bool shouldDebug = (++debugCounter % 100 == 1);  // 每100次输出一次
     
     for (const auto& rule : rules_) {
         if (!rule.enabled) continue;
@@ -366,23 +517,43 @@ const Rule* Config::matchRule(const std::string& processName,
         // 检查应用程序匹配
         if (!rule.applications.empty()) {
             appMatch = false;
+            
+            // 如果进程名为空或未知，跳过需要进程匹配的规则
+            if (procNameLower.empty() || procNameLower == "<pending>" || procNameLower == "<unknown>") {
+                continue;  // 跳过这条规则，尝试下一条
+            }
+            
             for (size_t i = 0; i < rule.appPatterns.size(); i++) {
-                if (std::regex_match(procNameLower, rule.appPatterns[i])) {
-                    appMatch = true;
-                    break;
+                try {
+                    if (std::regex_match(procNameLower, rule.appPatterns[i])) {
+                        appMatch = true;
+                        break;
+                    }
+                } catch (const std::exception& e) {
+                    // 忽略正则异常
                 }
             }
+            
+            // 如果应用程序不匹配，跳过这条规则
+            if (!appMatch) continue;
         }
         
         // 检查目标地址匹配
         if (!rule.targets.empty()) {
             targetMatch = false;
             for (size_t i = 0; i < rule.targetPatterns.size(); i++) {
-                if (std::regex_match(targetLower, rule.targetPatterns[i])) {
-                    targetMatch = true;
-                    break;
+                try {
+                    if (std::regex_match(targetLower, rule.targetPatterns[i])) {
+                        targetMatch = true;
+                        break;
+                    }
+                } catch (const std::exception& e) {
+                    // 忽略正则异常
                 }
             }
+            
+            // 如果目标地址不匹配，跳过这条规则
+            if (!targetMatch) continue;
         }
         
         // 检查端口匹配
@@ -394,12 +565,13 @@ const Rule* Config::matchRule(const std::string& processName,
                     break;
                 }
             }
+            
+            // 如果端口不匹配，跳过这条规则
+            if (!portMatch) continue;
         }
         
         // 所有条件都匹配
-        if (appMatch && targetMatch && portMatch) {
-            return &rule;
-        }
+        return &rule;
     }
     
     return nullptr;

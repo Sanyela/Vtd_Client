@@ -278,6 +278,11 @@ bool LocalProxyServer::connectToSocks5(ProxySession* session) {
         return false;
     }
     
+    // 检查是否为直接重定向（不使用 SOCKS5 协议）
+    if (session->proxyServer->isDirectRedirect) {
+        return connectDirect(session);
+    }
+    
     Socks5Client client;
     client.setProxy(session->proxyServer->address, session->proxyServer->port);
     
@@ -305,6 +310,61 @@ bool LocalProxyServer::connectToSocks5(ProxySession* session) {
     // 获取代理 socket
     session->proxySocket = client.releaseSocket();
     
+    return true;
+}
+
+bool LocalProxyServer::connectDirect(ProxySession* session) {
+    // 直接连接到重定向目标（不使用 SOCKS5 协议）
+    // 这用于简单的端口转发场景
+    
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) {
+        printf("[直接连接] 创建 socket 失败\n");
+        return false;
+    }
+    
+    // 设置超时
+    DWORD timeout = 10000;  // 10 秒
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (char*)&timeout, sizeof(timeout));
+    
+    // 解析目标地址
+    struct sockaddr_in targetAddr;
+    memset(&targetAddr, 0, sizeof(targetAddr));
+    targetAddr.sin_family = AF_INET;
+    targetAddr.sin_port = htons(session->proxyServer->port);
+    
+    // 尝试直接解析 IP
+    if (inet_pton(AF_INET, session->proxyServer->address.c_str(), &targetAddr.sin_addr) != 1) {
+        // 尝试 DNS 解析
+        struct addrinfo hints, *result;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        
+        if (getaddrinfo(session->proxyServer->address.c_str(), NULL, &hints, &result) != 0) {
+            printf("[直接连接] DNS 解析失败: %s\n", session->proxyServer->address.c_str());
+            closesocket(sock);
+            return false;
+        }
+        
+        targetAddr.sin_addr = ((struct sockaddr_in*)result->ai_addr)->sin_addr;
+        freeaddrinfo(result);
+    }
+    
+    // 连接到目标
+    if (connect(sock, (struct sockaddr*)&targetAddr, sizeof(targetAddr)) == SOCKET_ERROR) {
+        DWORD error = WSAGetLastError();
+        printf("[直接连接] 连接失败: %s:%d (错误码=%lu)\n",
+               session->proxyServer->address.c_str(), session->proxyServer->port, error);
+        closesocket(sock);
+        return false;
+    }
+    
+    printf("[直接连接] 成功连接到 %s:%d\n",
+           session->proxyServer->address.c_str(), session->proxyServer->port);
+    
+    session->proxySocket = sock;
     return true;
 }
 

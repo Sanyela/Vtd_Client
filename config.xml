@@ -27,6 +27,15 @@
             <Port>1188</Port>
             <Address>111.170.155.198</Address>
         </Proxy>
+        <Proxy id="101" type="SOCKS5">
+            <Authentication enabled="true">
+                <Username></Username>
+                <Password></Password>
+            </Authentication>
+            <Options>272</Options>
+            <Port>669</Port>
+            <Address>110.42.32.61</Address>
+        </Proxy>
     </ProxyList>
     <ChainList />
     <RuleList>
@@ -53,9 +62,15 @@
             <Name>Game QQ Direct</Name>
         </Rule>
         <Rule enabled="true">
+            <Action type="Proxy">101</Action>
+            <Ports>80</Ports>
+            <Targets>baidu.com;*.baidu.com</Targets>
+            <Name>Baidu HTTP Proxy</Name>
+        </Rule>
+        <Rule enabled="true">
             <Action type="Proxy">100</Action>
-            <Targets>app.so.com;*.baidu.com;*4399.com</Targets>
-            <Name>Baidu Proxy</Name>
+            <Targets>app.so.com;*4399.com</Targets>
+            <Name>Other Proxy</Name>
         </Rule>
         <Rule enabled="true">
             <Action type="Direct" />

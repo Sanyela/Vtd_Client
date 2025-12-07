@@ -8,6 +8,7 @@
 
 #include <windows.h>
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <string>
 #include <map>
 #include <mutex>
@@ -105,6 +106,7 @@ private:
     void relayData(ProxySession* session);
     
     bool connectToSocks5(ProxySession* session);
+    bool connectDirect(ProxySession* session);  // 直接连接（不使用SOCKS5协议）
     std::string makeTargetKey(UINT32 srcAddr, UINT16 srcPort) const;
     
     struct OriginalTarget {

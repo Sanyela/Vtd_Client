@@ -123,6 +123,13 @@ private:
     std::string lastError_;
 };
 
+// SOCKS5 连接测试结果
+struct Socks5TestResult {
+    bool success = false;
+    std::string errorMessage;
+    int latencyMs = 0;  // 连接延迟（毫秒）
+};
+
 // SOCKS5 工具函数
 namespace socks5 {
     // 初始化 Winsock
@@ -137,6 +144,16 @@ namespace socks5 {
     
     // 获取错误描述
     std::string getReplyDescription(Socks5Reply reply);
+    
+    // 测试 SOCKS5 代理连接
+    // 参数：代理地址、端口、用户名、密码、超时时间（毫秒）
+    // 返回：测试结果
+    Socks5TestResult testProxyConnection(
+        const std::string& proxyHost,
+        int proxyPort,
+        const std::string& username = "",
+        const std::string& password = "",
+        int timeoutMs = 10000);
 }
 
 } // namespace proxifier

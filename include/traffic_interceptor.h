@@ -46,9 +46,14 @@ struct TrackedConnection {
     UINT32 dstAddr = 0;
     UINT16 dstPort = 0;
     
+    // 原始目标地址（重定向前）
+    UINT32 originalDstAddr = 0;
+    UINT16 originalDstPort = 0;
+    
     bool isIPv6 = false;
     UINT32 srcAddrV6[4] = {0};
     UINT32 dstAddrV6[4] = {0};
+    UINT32 originalDstAddrV6[4] = {0};
     
     InterceptAction action = InterceptAction::ALLOW;
     const ProxyServer* proxyServer = nullptr;
@@ -106,6 +111,12 @@ public:
     
     // 设置本地代理地址
     void setLocalProxyAddress(UINT32 addr, UINT16 port);
+    
+    // 处理 FLOW 层连接事件（预先做出代理决策）
+    void onFlowEstablished(UINT32 processId, const std::string& processName,
+                           UINT32 localAddr, UINT16 localPort,
+                           UINT32 remoteAddr, UINT16 remotePort,
+                           UINT8 protocol);
 
 private:
     void interceptThread();
@@ -157,6 +168,17 @@ private:
     // 连接跟踪
     mutable std::mutex connectionsMutex_;
     std::map<std::string, TrackedConnection> connections_;
+    
+    // 预先决策缓存（由 FLOW 层填充，NETWORK 层使用）
+    struct PreDecision {
+        InterceptAction action = InterceptAction::ALLOW;
+        const ProxyServer* proxyServer = nullptr;
+        UINT32 processId = 0;
+        std::string processName;
+        INT64 timestamp = 0;
+    };
+    mutable std::mutex preDecisionsMutex_;
+    std::map<std::string, PreDecision> preDecisions_;
     
     // 手动代理进程列表
     mutable std::mutex manualProxyMutex_;
