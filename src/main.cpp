@@ -318,7 +318,7 @@ int main(int argc, char* argv[]) {
                 stats.connectionsTracked, stats.connectionsRedirected,
                 stats.connectionsBlocked);
             printf("[统计] 会话: 总数=%llu, 活动=%llu\n",
-                proxyServer.getTotalSessions(), proxyServer.getActiveSessions());
+                proxyServer.getTotalSessions(), proxyServer.getActiveSessionCount());
         }
     }
     

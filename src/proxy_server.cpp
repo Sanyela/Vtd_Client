@@ -360,7 +360,7 @@ std::map<UINT64, std::shared_ptr<ProxySession>> LocalProxyServer::getActiveSessi
     return sessions_;
 }
 
-UINT64 LocalProxyServer::getActiveSessions() const {
+UINT64 LocalProxyServer::getActiveSessionCount() const {
     std::lock_guard<std::mutex> lock(sessionsMutex_);
     return sessions_.size();
 }

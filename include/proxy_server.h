@@ -95,7 +95,7 @@ public:
     
     // 获取统计信息
     UINT64 getTotalSessions() const { return totalSessions_; }
-    UINT64 getActiveSessions() const;
+    UINT64 getActiveSessionCount() const;
     UINT64 getTotalBytesSent() const { return totalBytesSent_; }
     UINT64 getTotalBytesReceived() const { return totalBytesReceived_; }
 
