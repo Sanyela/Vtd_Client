@@ -33,7 +33,7 @@ enum class Socks5Command : UINT8 {
 // SOCKS5 地址类型
 enum class Socks5AddrType : UINT8 {
     IPV4 = 0x01,
-    DOMAIN = 0x03,
+    DOMAINNAME = 0x03,  // 避免与 Windows DOMAIN 宏冲突
     IPV6 = 0x04
 };
 

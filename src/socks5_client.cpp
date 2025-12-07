@@ -296,8 +296,8 @@ Socks5ConnectResult Socks5Client::connectToTarget(const std::string& targetHost,
     }
     
     // 域名
-    return sendConnectRequest(Socks5AddrType::DOMAIN, 
-                              targetHost.c_str(), 
+    return sendConnectRequest(Socks5AddrType::DOMAINNAME,
+                              targetHost.c_str(),
                               targetHost.length(),
                               (UINT16)targetPort);
 }
@@ -342,7 +342,7 @@ Socks5ConnectResult Socks5Client::sendConnectRequest(Socks5AddrType addrType,
     request.push_back(0x00);  // 保留
     request.push_back((UINT8)addrType);
     
-    if (addrType == Socks5AddrType::DOMAIN) {
+    if (addrType == Socks5AddrType::DOMAINNAME) {
         // 域名格式: 长度(1字节) + 域名
         request.push_back((UINT8)addrLen);
         const char* domain = static_cast<const char*>(addr);
@@ -404,7 +404,7 @@ Socks5ConnectResult Socks5Client::sendConnectRequest(Socks5AddrType addrType,
             return result;
         }
         result.boundAddr = socks5::ipv6ToString(boundAddr);
-    } else if (boundAddrType == Socks5AddrType::DOMAIN) {
+    } else if (boundAddrType == Socks5AddrType::DOMAINNAME) {
         UINT8 domainLen;
         if (!recvAll(&domainLen, 1)) {
             result.errorMessage = "Failed to receive domain length";
