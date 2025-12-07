@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<ProxifierProfile version="102" platform="Windows" product_id="0" product_minver="400">
+    <Options>
+        <Resolve>
+            <AutoModeDetection enabled="true" />
+            <ViaProxy enabled="false" />
+            <BlockNonATypes enabled="false" />
+            <ExclusionList OnlyFromListMode="false">%ComputerName%; localhost; *.local</ExclusionList>
+            <DnsUdpMode>0</DnsUdpMode>
+        </Resolve>
+        <Encryption mode="disabled" />
+        <ConnectionLoopDetection enabled="true" resolve="true" />
+        <Udp mode="mode_bypass" />
+        <LeakPreventionMode enabled="false" />
+        <ProcessOtherUsers enabled="false" />
+        <ProcessServices enabled="false" />
+        <HandleDirectConnections enabled="false" />
+        <HttpProxiesSupport enabled="false" />
+    </Options>
+    <ProxyList>
+        <Proxy id="100" type="SOCKS5">
+            <Authentication enabled="true">
+                <Password>1</Password>
+                <Username>1</Username>
+            </Authentication>
+            <Options>272</Options>
+            <Port>1188</Port>
+            <Address>111.170.155.198</Address>
+        </Proxy>
+    </ProxyList>
+    <ChainList />
+    <RuleList>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>localhost; 127.0.0.1; %ComputerName%; ::1</Targets>
+            <Name>Localhost</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>down.anticheatexpert.com.wsdvs.com;down.anticheatexpert.com</Targets>
+            <Name>AntiCheat Direct</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Proxy">100</Action>
+            <Ports>10012</Ports>
+            <Applications>valorant-win64-shipping.exe; deltaforceclient.exe; deltaforceclient-win64-shipping.exe</Applications>
+            <Name>Game Proxy</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>*.qq.com;cschannel2.anticheatexpert.com</Targets>
+            <Applications>valorant-win64-shipping.exe; deltaforceclient.exe; deltaforceclient-win64-shipping.exe</Applications>
+            <Name>Game QQ Direct</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Proxy">100</Action>
+            <Targets>app.so.com;*.baidu.com;*4399.com</Targets>
+            <Name>Baidu Proxy</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>*.tcdnos.com</Targets>
+            <Name>CDN Direct</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>lobby-prod.df.qq.com</Targets>
+            <Name>Lobby Direct</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>www.microsoft.com</Targets>
+            <Name>Microsoft Direct</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>www.wegame.com.cn</Targets>
+            <Name>WeGame Direct</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Targets>light-cfg-1251626029.file.myqcloud.com</Targets>
+            <Name>QCloud Direct</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Block" />
+            <Ports>80;443</Ports>
+            <Applications>valorant-win64-shipping.exe; deltaforceclient.exe; deltaforceclient-win64-shipping.exe</Applications>
+            <Name>Game HTTP Block</Name>
+        </Rule>
+        <Rule enabled="true">
+            <Action type="Direct" />
+            <Name>Default</Name>
+        </Rule>
+    </RuleList>
+</ProxifierProfile>

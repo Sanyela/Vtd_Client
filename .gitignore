@@ -1,0 +1,45 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# IDE files
+.vs/
+.vscode/
+*.suo
+*.user
+*.sln.docstates
+.idea/
+
+# Compiled files
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# But keep WinDivert files
+!x64/WinDivert.dll
+!x64/WinDivert64.sys
+!x86/WinDivert.dll
+!x86/WinDivert32.sys
+!x86/WinDivert64.sys
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Python virtual environment (if any)
+.venv/
+venv/
+__pycache__/
+*.pyc
