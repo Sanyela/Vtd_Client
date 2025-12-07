@@ -511,11 +511,13 @@ void TrafficInterceptor::cleanupExpiredConnections() {
 }
 
 std::string TrafficInterceptor::ipToString(UINT32 addr) const {
+    // WinDivert 返回的 IP 地址是网络字节序（大端）
+    // 需要按照大端方式解析：高字节在前
     std::ostringstream oss;
-    oss << ((addr >> 0) & 0xFF) << "."
-        << ((addr >> 8) & 0xFF) << "."
+    oss << ((addr >> 24) & 0xFF) << "."
         << ((addr >> 16) & 0xFF) << "."
-        << ((addr >> 24) & 0xFF);
+        << ((addr >> 8) & 0xFF) << "."
+        << ((addr >> 0) & 0xFF);
     return oss.str();
 }
 
@@ -525,8 +527,8 @@ std::string TrafficInterceptor::ipv6ToString(const UINT32* addr) const {
 }
 
 bool TrafficInterceptor::isLocalAddress(UINT32 addr) const {
-    // 127.0.0.0/8
-    return (addr & 0xFF) == 127;
+    // 127.0.0.0/8 - 网络字节序，高字节在最高位
+    return ((addr >> 24) & 0xFF) == 127;
 }
 
 bool TrafficInterceptor::isLocalAddressV6(const UINT32* addr) const {
@@ -566,8 +568,8 @@ void TrafficInterceptor::onFlowEstablished(UINT32 processId, const std::string& 
     // 只处理 TCP 出站连接
     if (protocol != 6) return;
     
-    // 忽略回环地址
-    if ((localAddr & 0xFF) == 127 || (remoteAddr & 0xFF) == 127) return;
+    // 忽略回环地址 - 网络字节序，高字节在最高位
+    if (((localAddr >> 24) & 0xFF) == 127 || ((remoteAddr >> 24) & 0xFF) == 127) return;
     
     // 做出代理决策
     InterceptDecision decision = makeDecision(processId, processName, remoteAddr, remotePort, protocol);

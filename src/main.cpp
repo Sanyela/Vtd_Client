@@ -292,14 +292,15 @@ bool handleProxyCredentials(Config& config) {
     return true;
 }
 
-// 验证所有需要认证的代理
+// 验证所有需要认证的代理，如果失败则提示用户重新输入
 bool verifyAllProxyConnections(Config& config) {
     printf("\n正在验证代理连接...\n");
     
     bool allSuccess = true;
     bool hasProxyToTest = false;
+    std::vector<ProxyCredentials> updatedCredentials;
     
-    for (const auto& proxy : config.getProxies()) {
+    for (auto& proxy : config.getProxies()) {
         // 跳过直接重定向类型的代理（它们不使用 SOCKS5 协议）
         if (proxy.isDirectRedirect) {
             printf("  代理 [ID=%d] %s:%d - 直接重定向，跳过验证\n",
@@ -321,13 +322,104 @@ bool verifyAllProxyConnections(Config& config) {
                 printf("成功 (延迟: %dms)\n", result.latencyMs);
             } else {
                 printf("失败: %s\n", result.errorMessage.c_str());
-                allSuccess = false;
+                
+                // 凭据验证失败，提示用户重新输入
+                printf("\n  代理 [ID=%d] 认证失败，请重新输入凭据:\n", proxy.id);
+                
+                bool retrySuccess = false;
+                for (int retry = 0; retry < 3 && !retrySuccess; retry++) {
+                    printf("    用户名: ");
+                    std::string username;
+                    std::getline(std::cin, username);
+                    
+                    if (username.empty()) {
+                        printf("    用户名不能为空\n");
+                        continue;
+                    }
+                    
+                    printf("    密码: ");
+                    std::string password = readPassword();
+                    
+                    if (password.empty()) {
+                        printf("    密码不能为空\n");
+                        continue;
+                    }
+                    
+                    printf("    正在测试连接...");
+                    fflush(stdout);
+                    
+                    result = socks5::testProxyConnection(
+                        proxy.address, proxy.port, username, password, 10000);
+                    
+                    if (result.success) {
+                        printf(" 成功! (延迟: %dms)\n", result.latencyMs);
+                        
+                        // 更新配置中的凭据
+                        config.updateProxyCredentials(proxy.id, username, password);
+                        
+                        // 保存到更新列表
+                        ProxyCredentials cred;
+                        cred.proxyId = proxy.id;
+                        cred.username = username;
+                        cred.password = password;
+                        updatedCredentials.push_back(cred);
+                        
+                        retrySuccess = true;
+                    } else {
+                        printf(" 失败: %s\n", result.errorMessage.c_str());
+                        if (retry < 2) {
+                            printf("    请重试 (%d/3)\n", retry + 2);
+                        }
+                    }
+                }
+                
+                if (!retrySuccess) {
+                    printf("  警告: 代理 %d 认证失败，将跳过\n", proxy.id);
+                    allSuccess = false;
+                }
             }
         }
     }
     
     if (!hasProxyToTest) {
         printf("  没有需要验证的 SOCKS5 代理\n");
+    }
+    
+    // 如果有更新的凭据，询问是否保存
+    if (!updatedCredentials.empty()) {
+        printf("\n是否保存更新的凭据以便下次自动登录? (y/n): ");
+        char saveChoice;
+        std::cin >> saveChoice;
+        std::cin.ignore();
+        
+        if (saveChoice == 'y' || saveChoice == 'Y') {
+            // 加载现有凭据
+            std::vector<ProxyCredentials> savedCredentials;
+            if (credentialsFileExists()) {
+                loadCredentials(savedCredentials);
+            }
+            
+            // 合并更新
+            for (const auto& newCred : updatedCredentials) {
+                bool found = false;
+                for (auto& saved : savedCredentials) {
+                    if (saved.proxyId == newCred.proxyId) {
+                        saved = newCred;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    savedCredentials.push_back(newCred);
+                }
+            }
+            
+            if (saveCredentials(savedCredentials)) {
+                printf("凭据已保存到 credentials.dat\n");
+            } else {
+                printf("警告: 无法保存凭据\n");
+            }
+        }
     }
     
     return allSuccess;
@@ -340,15 +432,16 @@ void onConnectionEvent(ConnectionEvent event, const ConnectionInfo& info) {
     printf("[FLOW] 连接%s: %s (PID=%u) ", eventStr, info.processName.c_str(), info.processId);
     
     // 打印地址信息
+    // WinDivert FLOW 层返回的 IP 地址是网络字节序（大端），高字节在最高位
     if (!info.isIPv6) {
         UINT32 local = info.localAddr[0];
         UINT32 remote = info.remoteAddr[0];
         printf("%u.%u.%u.%u:%u -> %u.%u.%u.%u:%u",
-            (local >> 0) & 0xFF, (local >> 8) & 0xFF,
-            (local >> 16) & 0xFF, (local >> 24) & 0xFF,
+            (local >> 24) & 0xFF, (local >> 16) & 0xFF,
+            (local >> 8) & 0xFF, (local >> 0) & 0xFF,
             info.localPort,
-            (remote >> 0) & 0xFF, (remote >> 8) & 0xFF,
-            (remote >> 16) & 0xFF, (remote >> 24) & 0xFF,
+            (remote >> 24) & 0xFF, (remote >> 16) & 0xFF,
+            (remote >> 8) & 0xFF, (remote >> 0) & 0xFF,
             info.remotePort);
     }
     
@@ -368,12 +461,13 @@ void onConnectionEvent(ConnectionEvent event, const ConnectionInfo& info) {
 // 会话回调
 void onSessionEvent(ProxySession* session, const std::string& event) {
     if (event == "started") {
+        // WinDivert 返回的 IP 地址是网络字节序（大端），高字节在最高位
         printf("[PROXY] 新会话: %s (PID=%u) -> %u.%u.%u.%u:%u\n",
             session->processName.c_str(), session->processId,
-            (session->originalDstAddr >> 0) & 0xFF,
-            (session->originalDstAddr >> 8) & 0xFF,
-            (session->originalDstAddr >> 16) & 0xFF,
             (session->originalDstAddr >> 24) & 0xFF,
+            (session->originalDstAddr >> 16) & 0xFF,
+            (session->originalDstAddr >> 8) & 0xFF,
+            (session->originalDstAddr >> 0) & 0xFF,
             session->originalDstPort);
     } else if (event == "connected") {
         printf("[PROXY] 会话已连接: %llu\n", session->sessionId);
