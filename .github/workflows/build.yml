@@ -13,71 +13,79 @@ env:
   BUILD_TYPE: Release
 
 jobs:
-  build:
+  build-x64:
     runs-on: windows-latest
+    timeout-minutes: 30
     
-    strategy:
-      matrix:
-        arch: [x64, x86]
-        include:
-          - arch: x64
-            cmake_arch: x64
-            msvc_arch: amd64
-          - arch: x86
-            cmake_arch: Win32
-            msvc_arch: x86
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v2
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
 
-    - name: Setup CMake
-      uses: lukka/get-cmake@latest
-
-    - name: Configure CMake (${{ matrix.arch }})
-      run: |
-        cmake -B build -A ${{ matrix.cmake_arch }} -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+    - name: Configure CMake (x64)
+      run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
     - name: Build
-      run: |
-        cmake --build build --config ${{ env.BUILD_TYPE }}
-
-    - name: List build output
-      run: |
-        dir build\bin\${{ env.BUILD_TYPE }}
-      shell: cmd
-      continue-on-error: true
-
-    - name: List build output (alternative)
-      run: |
-        dir build\bin
-      shell: cmd
-      continue-on-error: true
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
 
     - name: Prepare artifacts
       run: |
-        mkdir -p artifacts
-        cp build/bin/${{ env.BUILD_TYPE }}/proxifier.exe artifacts/ 2>$null || cp build/bin/proxifier.exe artifacts/
-        cp build/bin/${{ env.BUILD_TYPE }}/WinDivert.dll artifacts/ 2>$null || cp build/bin/WinDivert.dll artifacts/
-        cp build/bin/${{ env.BUILD_TYPE }}/*.sys artifacts/ 2>$null || cp build/bin/*.sys artifacts/
-        cp config.xml artifacts/
+        New-Item -ItemType Directory -Force -Path artifacts
+        Copy-Item -Path "build/bin/${{ env.BUILD_TYPE }}/*" -Destination "artifacts/" -Recurse -ErrorAction SilentlyContinue
+        Copy-Item -Path "build/bin/*" -Destination "artifacts/" -Recurse -ErrorAction SilentlyContinue
+        Copy-Item -Path "config.xml" -Destination "artifacts/" -ErrorAction SilentlyContinue
+        Get-ChildItem -Path "artifacts/" -Recurse
       shell: pwsh
-      continue-on-error: true
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: proxifier-${{ matrix.arch }}
-        path: |
-          artifacts/
+        name: proxifier-x64
+        path: artifacts/
+        if-no-files-found: warn
+
+  build-x86:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x86
+
+    - name: Configure CMake (x86)
+      run: cmake -B build -G "Visual Studio 17 2022" -A Win32 -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+    - name: Prepare artifacts
+      run: |
+        New-Item -ItemType Directory -Force -Path artifacts
+        Copy-Item -Path "build/bin/${{ env.BUILD_TYPE }}/*" -Destination "artifacts/" -Recurse -ErrorAction SilentlyContinue
+        Copy-Item -Path "build/bin/*" -Destination "artifacts/" -Recurse -ErrorAction SilentlyContinue
+        Copy-Item -Path "config.xml" -Destination "artifacts/" -ErrorAction SilentlyContinue
+        Get-ChildItem -Path "artifacts/" -Recurse
+      shell: pwsh
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: proxifier-x86
+        path: artifacts/
         if-no-files-found: warn
 
   # 创建 Release（仅在推送 tag 时）
   release:
-    needs: build
+    needs: [build-x64, build-x86]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     
@@ -109,66 +117,5 @@ jobs:
         draft: false
         prerelease: false
         generate_release_notes: true
-        body: |
-          ## WinDivert Proxifier
-          
-          进程级别 SOCKS5 代理工具，基于 WinDivert 实现。
-          
-          ### 功能
-          - 支持 Proxifier 配置文件格式
-          - 进程名、目标地址、端口匹配
-          - SOCKS5 代理（支持认证）
-          - 规则优先级匹配
-          
-          ### 使用方法
-          1. 下载对应架构的 ZIP 文件
-          2. 解压到任意目录
-          3. 编辑 config.xml 配置文件
-          4. 以管理员身份运行 proxifier.exe
-          
-          ### 注意事项
-          - 需要管理员权限
-          - 需要禁用驱动签名验证（测试模式）或使用已签名的驱动
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # MinGW 构建（可选，作为备用）
-  build-mingw:
-    runs-on: windows-latest
-    continue-on-error: true
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup MinGW
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          make
-
-    - name: Build with MinGW
-      shell: msys2 {0}
-      run: |
-        cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
-        cmake --build build
-
-    - name: Prepare MinGW artifacts
-      shell: msys2 {0}
-      run: |
-        mkdir -p artifacts
-        cp build/bin/proxifier.exe artifacts/ || true
-        cp build/bin/WinDivert.dll artifacts/ || true
-        cp build/bin/*.sys artifacts/ || true
-        cp config.xml artifacts/ || true
-
-    - name: Upload MinGW artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: proxifier-mingw64
-        path: artifacts/
-        if-no-files-found: warn
