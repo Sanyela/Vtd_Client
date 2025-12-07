@@ -177,6 +177,10 @@ bool Config::loadFromXml(const std::string& xmlContent) {
             proxy.type = ProxyType::SOCKS5;
         } else if (typeStr == "HTTP") {
             proxy.type = ProxyType::HTTP;
+        } else if (typeStr == "DIRECT") {
+            // 直接端口转发类型 - 不使用 SOCKS5 协议
+            proxy.type = ProxyType::DIRECT;
+            proxy.isDirectRedirect = true;
         }
         
         proxy.address = getXmlTagContent(proxyXml, "Address");
@@ -190,19 +194,23 @@ bool Config::loadFromXml(const std::string& xmlContent) {
         std::string authEnabled = getXmlAttribute(proxyXml, "Authentication", "enabled");
         proxy.authEnabled = (authEnabled == "true");
         
-        if (proxy.authEnabled) {
-            proxy.username = getXmlTagContent(proxyXml, "Username");
-            proxy.password = getXmlTagContent(proxyXml, "Password");
+        // 解析用户名和密码
+        std::string authSection = getXmlTagContent(proxyXml, "Authentication");
+        if (!authSection.empty()) {
+            proxy.username = trim(getXmlTagContent(authSection, "Username"));
+            proxy.password = trim(getXmlTagContent(authSection, "Password"));
         }
         
-        // 检测是否为直接重定向（认证启用但用户名密码都为空）
-        // 这种情况下，这个"代理"实际上是一个直接端口转发目标
-        if (proxy.authEnabled && proxy.username.empty() && proxy.password.empty()) {
-            proxy.isDirectRedirect = true;
-            proxy.authEnabled = false;  // 直接重定向不需要认证
-            printf("[配置] 代理 %d (%s:%d) 被识别为直接重定向目标\n",
-                   proxy.id, proxy.address.c_str(), proxy.port);
-        }
+        // 调试输出
+        printf("[配置] 代理 %d: 地址=%s:%d, 认证=%s, 用户名='%s', 密码长度=%zu\n",
+               proxy.id, proxy.address.c_str(), proxy.port,
+               proxy.authEnabled ? "是" : "否",
+               proxy.username.c_str(), proxy.password.length());
+        
+        // 不再自动检测直接重定向
+        // 用户需要在配置中明确指定，或者通过代理 ID 来区分
+        // 默认所有代理都是 SOCKS5 代理
+        proxy.isDirectRedirect = false;
         
         addProxy(proxy);
     }

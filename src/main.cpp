@@ -315,23 +315,73 @@ bool verifyAllProxyConnections(Config& config) {
             continue;
         }
         
-        if (proxy.authEnabled) {
-            hasProxyToTest = true;
-            printf("  测试代理 [ID=%d] %s:%d ... ",
+        // 只处理需要认证的代理
+        if (!proxy.authEnabled) {
+            printf("  代理 [ID=%d] %s:%d - 无需认证\n",
                    proxy.id, proxy.address.c_str(), proxy.port);
-            fflush(stdout);
+            continue;
+        }
+        
+        hasProxyToTest = true;
+        
+        // 如果凭据为空，先提示用户输入
+        if (proxy.username.empty() || proxy.password.empty()) {
+            printf("  代理 [ID=%d] %s:%d 需要输入凭据:\n",
+                   proxy.id, proxy.address.c_str(), proxy.port);
             
-            auto result = socks5::testProxyConnection(
-                proxy.address, proxy.port,
-                proxy.username, proxy.password, 10000);
+            printf("    用户名: ");
+            std::string username;
+            std::getline(std::cin, username);
             
-            if (result.success) {
-                printf("成功 (延迟: %dms)\n", result.latencyMs);
-            } else {
-                printf("失败: %s\n", result.errorMessage.c_str());
-                
-                // 凭据验证失败，提示用户重新输入
-                printf("\n  代理 [ID=%d] 认证失败，请重新输入凭据:\n", proxy.id);
+            if (username.empty()) {
+                printf("    用户名不能为空，跳过此代理\n");
+                allSuccess = false;
+                continue;
+            }
+            
+            printf("    密码: ");
+            std::string password = readPassword();
+            
+            if (password.empty()) {
+                printf("    密码不能为空，跳过此代理\n");
+                allSuccess = false;
+                continue;
+            }
+            
+            // 更新配置
+            config.updateProxyCredentials(proxy.id, username, password);
+            
+            // 重新获取代理信息（因为我们更新了凭据）
+            const ProxyServer* updatedProxy = config.getProxy(proxy.id);
+            if (updatedProxy) {
+                proxy.username = updatedProxy->username;
+                proxy.password = updatedProxy->password;
+            }
+            
+            // 保存到更新列表
+            ProxyCredentials cred;
+            cred.proxyId = proxy.id;
+            cred.username = username;
+            cred.password = password;
+            updatedCredentials.push_back(cred);
+        }
+        
+        // 测试连接
+        printf("  测试代理 [ID=%d] %s:%d ... ",
+               proxy.id, proxy.address.c_str(), proxy.port);
+        fflush(stdout);
+        
+        auto result = socks5::testProxyConnection(
+            proxy.address, proxy.port,
+            proxy.username, proxy.password, 10000);
+        
+        if (result.success) {
+            printf("成功 (延迟: %dms)\n", result.latencyMs);
+        } else {
+            printf("失败: %s\n", result.errorMessage.c_str());
+            
+            // 凭据验证失败，提示用户重新输入
+            printf("\n  代理 [ID=%d] 认证失败，请重新输入凭据:\n", proxy.id);
                 
                 bool retrySuccess = false;
                 for (int retry = 0; retry < 3 && !retrySuccess; retry++) {

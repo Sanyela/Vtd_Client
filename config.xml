@@ -27,10 +27,8 @@
             <Port>1188</Port>
             <Address>111.170.155.198</Address>
         </Proxy>
-        <Proxy id="101" type="SOCKS5">
-            <Authentication enabled="true">
-                <Username></Username>
-                <Password></Password>
+        <Proxy id="101" type="DIRECT">
+            <Authentication enabled="false">
             </Authentication>
             <Options>272</Options>
             <Port>669</Port>
