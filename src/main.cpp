@@ -286,9 +286,39 @@ int main(int argc, char* argv[]) {
     
     printf("启动进程监控...\n");
     if (!processMonitor.start()) {
-        fprintf(stderr, "错误: 无法启动进程监控 (错误码=%lu)\n", GetLastError());
-        fprintf(stderr, "请确保以管理员身份运行，并且 WinDivert 驱动文件存在\n");
+        DWORD error = GetLastError();
+        fprintf(stderr, "错误: 无法启动进程监控 (错误码=%lu)\n", error);
+        
+        // 根据错误码给出更详细的提示
+        switch (error) {
+            case 2:  // ERROR_FILE_NOT_FOUND
+                fprintf(stderr, "  -> WinDivert 驱动文件未找到\n");
+                fprintf(stderr, "  -> 请确保 WinDivert64.sys 或 WinDivert32.sys 在程序目录下\n");
+                break;
+            case 5:  // ERROR_ACCESS_DENIED
+                fprintf(stderr, "  -> 访问被拒绝，请以管理员身份运行程序\n");
+                break;
+            case 577:  // ERROR_INVALID_IMAGE_HASH
+                fprintf(stderr, "  -> 驱动签名验证失败\n");
+                fprintf(stderr, "  -> 可能需要禁用驱动签名强制或使用签名的驱动\n");
+                break;
+            case 1275:  // ERROR_DRIVER_BLOCKED
+                fprintf(stderr, "  -> 驱动被阻止加载\n");
+                fprintf(stderr, "  -> 可能被安全软件阻止，请检查杀毒软件设置\n");
+                break;
+            case 1058:  // ERROR_SERVICE_DISABLED
+                fprintf(stderr, "  -> 服务被禁用\n");
+                break;
+            case 87:  // ERROR_INVALID_PARAMETER
+                fprintf(stderr, "  -> 无效参数，可能是过滤器语法错误\n");
+                break;
+            default:
+                fprintf(stderr, "  -> 请确保以管理员身份运行，并且 WinDivert 驱动文件存在\n");
+                break;
+        }
+        
         proxyServer.stop();
+        WinDivertLoaderCleanup();
         return 1;
     }
     printf("进程监控已启动\n");
@@ -301,9 +331,40 @@ int main(int argc, char* argv[]) {
     
     printf("启动流量拦截器...\n");
     if (!interceptor.start()) {
-        fprintf(stderr, "错误: 无法启动流量拦截器 (错误码=%lu)\n", GetLastError());
+        DWORD error = GetLastError();
+        fprintf(stderr, "错误: 无法启动流量拦截器 (错误码=%lu)\n", error);
+        
+        // 根据错误码给出更详细的提示
+        switch (error) {
+            case 2:  // ERROR_FILE_NOT_FOUND
+                fprintf(stderr, "  -> WinDivert 驱动文件未找到\n");
+                fprintf(stderr, "  -> 请确保 WinDivert64.sys 或 WinDivert32.sys 在程序目录下\n");
+                break;
+            case 5:  // ERROR_ACCESS_DENIED
+                fprintf(stderr, "  -> 访问被拒绝，请以管理员身份运行程序\n");
+                break;
+            case 577:  // ERROR_INVALID_IMAGE_HASH
+                fprintf(stderr, "  -> 驱动签名验证失败\n");
+                fprintf(stderr, "  -> 可能需要禁用驱动签名强制或使用签名的驱动\n");
+                break;
+            case 1275:  // ERROR_DRIVER_BLOCKED
+                fprintf(stderr, "  -> 驱动被阻止加载\n");
+                fprintf(stderr, "  -> 可能被安全软件阻止，请检查杀毒软件设置\n");
+                break;
+            case 1058:  // ERROR_SERVICE_DISABLED
+                fprintf(stderr, "  -> 服务被禁用\n");
+                break;
+            case 87:  // ERROR_INVALID_PARAMETER
+                fprintf(stderr, "  -> 无效参数，可能是过滤器语法错误\n");
+                break;
+            default:
+                fprintf(stderr, "  -> 请确保以管理员身份运行，并且 WinDivert 驱动文件存在\n");
+                break;
+        }
+        
         processMonitor.stop();
         proxyServer.stop();
+        WinDivertLoaderCleanup();
         return 1;
     }
     printf("流量拦截器已启动\n");
