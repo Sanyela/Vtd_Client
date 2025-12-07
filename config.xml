@@ -20,8 +20,8 @@
     <ProxyList>
         <Proxy id="100" type="SOCKS5">
             <Authentication enabled="true">
-                <Password>1</Password>
-                <Username>1</Username>
+                <Password></Password>
+                <Username></Username>
             </Authentication>
             <Options>272</Options>
             <Port>1188</Port>

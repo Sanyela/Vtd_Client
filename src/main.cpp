@@ -25,6 +25,7 @@
 #include "traffic_interceptor.h"
 #include "socks5_client.h"
 #include "windivert_loader.h"
+#include "dns_monitor.h"
 
 using namespace proxifier;
 
@@ -66,8 +67,14 @@ void printConfig(const Config& config) {
     printf("\n代理服务器:\n");
     for (const auto& proxy : config.getProxies()) {
         printf("  [%d] %s:%d", proxy.id, proxy.address.c_str(), proxy.port);
-        if (proxy.authEnabled) {
-            printf(" (认证: %s)", proxy.username.c_str());
+        if (proxy.isDirectRedirect) {
+            printf(" (直接重定向)");
+        } else if (proxy.authEnabled) {
+            if (!proxy.username.empty()) {
+                printf(" (认证: 用户=%s)", proxy.username.c_str());
+            } else {
+                printf(" (需要认证)");
+            }
         }
         printf("\n");
     }
@@ -663,6 +670,16 @@ int main(int argc, char* argv[]) {
     }
     printf("进程监控已启动\n");
     
+    // 启动 DNS 监控（用于域名匹配）
+    DnsMonitor& dnsMonitor = getDnsMonitor();
+    printf("启动 DNS 监控...\n");
+    if (!dnsMonitor.start()) {
+        printf("警告: DNS 监控启动失败，域名匹配功能将不可用\n");
+        printf("       规则将只能匹配 IP 地址\n");
+    } else {
+        printf("DNS 监控已启动\n");
+    }
+    
     // 启动流量拦截器
     TrafficInterceptor& interceptor = getTrafficInterceptor();
     interceptor.setConfig(&config);
@@ -731,6 +748,10 @@ int main(int argc, char* argv[]) {
                 stats.connectionsBlocked);
             printf("[统计] 会话: 总数=%llu, 活动=%llu\n",
                 proxyServer.getTotalSessions(), proxyServer.getActiveSessionCount());
+            printf("[统计] DNS映射: %zu 条\n", dnsMonitor.getMappingCount());
+            
+            // 定期清理过期的 DNS 记录
+            dnsMonitor.cleanupExpiredRecords();
         }
     }
     
@@ -739,6 +760,9 @@ int main(int argc, char* argv[]) {
     
     interceptor.stop();
     printf("流量拦截器已停止\n");
+    
+    dnsMonitor.stop();
+    printf("DNS 监控已停止\n");
     
     processMonitor.stop();
     printf("进程监控已停止\n");

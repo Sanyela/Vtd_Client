@@ -48,6 +48,7 @@ set(SOURCES
     src/proxy_server.cpp
     src/traffic_interceptor.cpp
     src/windivert_loader.cpp
+    src/dns_monitor.cpp
 )
 
 # 头文件
@@ -57,6 +58,7 @@ set(HEADERS
     include/config.h
     include/process_monitor.h
     include/socks5_client.h
+    include/dns_monitor.h
     include/proxy_server.h
     include/traffic_interceptor.h
 )

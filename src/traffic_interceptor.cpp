@@ -18,6 +18,7 @@
 #include "process_monitor.h"
 #include "proxy_server.h"
 #include "windivert_loader.h"
+#include "dns_monitor.h"
 #include <sstream>
 #include <chrono>
 #include <cstdio>
@@ -354,6 +355,13 @@ InterceptDecision TrafficInterceptor::makeDecision(UINT32 processId, const std::
     // 转换目标地址为字符串
     std::string dstAddrStr = ipToString(dstAddr);
     
+    // 尝试从 DNS 监控获取域名
+    DnsMonitor& dnsMonitor = getDnsMonitor();
+    std::string domain = dnsMonitor.findDomainByIp(dstAddr);
+    
+    // 如果找到域名，优先使用域名进行匹配
+    std::string targetForMatch = domain.empty() ? dstAddrStr : domain;
+    
     // 如果进程名为空或 pending，尝试从进程 ID 获取
     std::string effectiveProcessName = processName;
     if (effectiveProcessName.empty() || effectiveProcessName == "<pending>" || effectiveProcessName == "<unknown>") {
@@ -363,8 +371,13 @@ InterceptDecision TrafficInterceptor::makeDecision(UINT32 processId, const std::
         }
     }
     
-    // 匹配规则
-    const Rule* rule = config_->matchRule(effectiveProcessName, dstAddrStr, dstPort);
+    // 匹配规则 - 先用域名匹配，如果没有域名则用 IP 匹配
+    const Rule* rule = config_->matchRule(effectiveProcessName, targetForMatch, dstPort);
+    
+    // 如果域名匹配失败，再尝试用 IP 地址匹配
+    if (rule == nullptr && !domain.empty()) {
+        rule = config_->matchRule(effectiveProcessName, dstAddrStr, dstPort);
+    }
     
     if (rule != nullptr) {
         decision.matchedRule = rule;
