@@ -63,12 +63,12 @@ bool TrafficInterceptor::start() {
     printf("[拦截器] 本地代理: 127.0.0.1:%d\n", localProxyPort_);
     
     // 打开 NETWORK 层句柄
-    // 拦截出站 TCP 连接，排除到本地代理的连接和回环地址
+    // 拦截出站 TCP 连接，排除回环地址
     char filter[512];
-    snprintf(filter, sizeof(filter), 
-        "outbound and tcp and "
-        "!(ip.DstAddr == 127.0.0.1) and "
-        "!(ip.SrcAddr == 127.0.0.1)");
+    snprintf(filter, sizeof(filter),
+        "outbound and ip and tcp and "
+        "ip.DstAddr != 127.0.0.1 and "
+        "ip.SrcAddr != 127.0.0.1");
     
     printf("[拦截器] 过滤器: %s\n", filter);
     
