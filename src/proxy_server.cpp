@@ -8,6 +8,7 @@
 #include "config.h"
 #include <sstream>
 #include <chrono>
+#include <algorithm>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -312,7 +313,7 @@ void LocalProxyServer::relayData(ProxySession* session) {
     fd_set readfds;
     char buffer[65536];
     
-    SOCKET maxfd = max(session->clientSocket, session->proxySocket);
+    SOCKET maxfd = (std::max)(session->clientSocket, session->proxySocket);
     
     while (!session->closed && running_) {
         FD_ZERO(&readfds);
