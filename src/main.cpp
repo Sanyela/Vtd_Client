@@ -22,6 +22,7 @@
 #include "proxy_server.h"
 #include "traffic_interceptor.h"
 #include "socks5_client.h"
+#include "windivert_loader.h"
 
 using namespace proxifier;
 
@@ -189,9 +190,19 @@ int main(int argc, char* argv[]) {
     printf("  WinDivert Proxifier - 进程级别代理\n");
     printf("===========================================\n");
     
+    // 初始化 WinDivert 动态加载器
+    printf("初始化 WinDivert...\n");
+    if (!WinDivertLoaderInit()) {
+        fprintf(stderr, "错误: 无法加载 WinDivert.dll\n");
+        fprintf(stderr, "请确保 WinDivert.dll 和驱动文件在程序目录下\n");
+        return 1;
+    }
+    printf("WinDivert 加载成功\n");
+    
     // 初始化 Winsock
     if (!socks5::initWinsock()) {
         fprintf(stderr, "错误: 无法初始化 Winsock\n");
+        WinDivertLoaderCleanup();
         return 1;
     }
     
@@ -336,6 +347,9 @@ int main(int argc, char* argv[]) {
     
     // 清理 Winsock
     socks5::cleanupWinsock();
+    
+    // 清理 WinDivert
+    WinDivertLoaderCleanup();
     
     printf("\n程序已退出\n");
     return 0;

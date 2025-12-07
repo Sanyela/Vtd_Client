@@ -4,7 +4,7 @@
  */
 
 #include "process_monitor.h"
-#include "windivert.h"
+#include "windivert_loader.h"
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <sstream>

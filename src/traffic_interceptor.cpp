@@ -7,7 +7,7 @@
 #include "config.h"
 #include "process_monitor.h"
 #include "proxy_server.h"
-#include "windivert.h"
+#include "windivert_loader.h"
 #include <sstream>
 #include <chrono>
 

@@ -47,11 +47,13 @@ set(SOURCES
     src/socks5_client.cpp
     src/proxy_server.cpp
     src/traffic_interceptor.cpp
+    src/windivert_loader.cpp
 )
 
 # 头文件
 set(HEADERS
     include/windivert.h
+    include/windivert_loader.h
     include/config.h
     include/process_monitor.h
     include/socks5_client.h
@@ -62,9 +64,8 @@ set(HEADERS
 # 创建可执行文件
 add_executable(proxifier ${SOURCES} ${HEADERS})
 
-# 链接库
-target_link_libraries(proxifier 
-    ${WINDIVERT_LIB_DIR}/WinDivert.dll
+# 链接库 - 使用动态加载，不直接链接 WinDivert.dll
+target_link_libraries(proxifier
     ws2_32
     psapi
 )
